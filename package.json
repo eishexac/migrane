@@ -1,6 +1,6 @@
 {
   "name": "migrane",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A SQL migration runner that knows nothing about your application.",
   "keywords": [
     "sql",

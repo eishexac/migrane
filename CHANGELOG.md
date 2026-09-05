@@ -1,6 +1,6 @@
----
-'migrane': minor
----
+# migrane
+
+## 0.3.0
 
 First release.
 
