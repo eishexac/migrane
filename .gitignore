@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# Pack output
+*.tgz
+
+# Caches & reports
+.cache/
+coverage/
+*.log
+*.log.gz
+npm-debug.log*
+pnpm-debug.log*
+
+# Environment
+# Every .env* is ignored. Commit .env.example instead — it documents the keys,
+# never the values.
+.env*
+!.env.example
+
+# Certificates & keys
+*.pem
+*.key
+*.p12
+*.keystore
+
+# Editors & OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.DS_Store
+Thumbs.db
+
+# Agent tooling
+.claude/settings.local.json
+
+# Runtime
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# temp directories
+.temp/
+.tmp/
+
+# Diagnostic reports (https://nodejs.org/api/report.html)
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json

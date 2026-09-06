@@ -1,0 +1,11 @@
+dist
+coverage
+pnpm-lock.yaml
+
+# The dispatch line in the executable is sh and JavaScript at once, and only
+# one arrangement of it is both. Prettier reads it as JavaScript and writes
+# `':'; //;` — still valid JavaScript, no longer valid sh, because `:` loses its
+# argument and the shell tries to *run* `//`. Every command then prints
+# "//: is a directory" to stderr before working. `pnpm format` is a documented
+# script, so without this line any contributor who runs it ships that.
+bin/migrane.js

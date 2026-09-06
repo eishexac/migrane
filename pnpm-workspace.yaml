@@ -1,0 +1,12 @@
+# Not a monorepo. This file is where pnpm reads install-time settings, and they
+# belong here rather than in `package.json`, which is published verbatim and
+# should carry what a consumer needs rather than how this checkout installs.
+
+# All three arrive through testcontainers → dockerode → ssh2, and none of them
+# is wanted built: ssh2's native crypto is optional and nothing here speaks SSH,
+# because the lane reaches docker over a local socket. Answered rather than left
+# open, so no install in this repository runs a dependency's build script.
+allowBuilds:
+  cpu-features: false
+  protobufjs: false
+  ssh2: false
