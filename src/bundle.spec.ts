@@ -1,0 +1,192 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { entryFor } from './bundle.js';
+import { fromManifest, type ManifestEntry } from './load.js';
+import type { Resolved } from './config.js';
+
+/**
+ * What the generator writes, and whether a machine with no source tree can run
+ * it.
+ *
+ * The cases that matter are the ones where the two loading rules differ: a
+ * `.ts` part is imported and a `.sql` part is read as text, and a generated
+ * file that forgets the difference emits an import no runtime can resolve.
+ * Nothing about that fails at generation time, which is why it is asserted on
+ * the text rather than left to a deploy to discover.
+ */
+describe('entryFor', () => {
+  let root: string;
+
+  const write = (path: string, content: string) => {
+    const full = join(root, path);
+
+    mkdirSync(join(full, '..'), { recursive: true });
+    writeFileSync(full, content);
+  };
+
+  const TS = 'export const up = async () => {};';
+  const SQL = '-- migrate:up\nCREATE TABLE users (id int);\n';
+
+  const configFor = (seeds?: string): Resolved =>
+    ({
+      dirs: [join(root, 'migrations')],
+      seeds,
+      table: 'migrations',
+      seedTable: 'seeds',
+      schema: 'public',
+      driver: () => {
+        throw new Error('the generator must not open a database.');
+      },
+    }) as unknown as Resolved;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'migrane-bundle-'));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('imports a .ts migration and names the binding in its parts', () => {
+    write('migrations/001-initial.ts', TS);
+
+    const entry = entryFor({ config: configFor() });
+
+    expect(entry).toContain('import * as m0_0 from');
+    expect(entry).toContain('parts: [m0_0]');
+  });
+
+  // The regression: a `.sql` file is loaded with `readFileSync` and never with
+  // `import`, so emitting an import for one produces a specifier no runtime
+  // resolves and no bundler turns into a module with `up` and `down`.
+  it('inlines a .sql migration rather than importing it', () => {
+    write('migrations/001-initial.sql', SQL);
+
+    const entry = entryFor({ config: configFor() });
+
+    expect(entry).not.toContain('import');
+    expect(entry).toContain('CREATE TABLE users (id int);');
+  });
+
+  it('keeps run order across parts of both kinds', () => {
+    write('migrations/001-initial/010-table.sql', SQL);
+    write('migrations/001-initial/020-backfill.ts', TS);
+
+    const entry = entryFor({ config: configFor() });
+    const parts = /parts: \[(.*)\]/s.exec(entry)?.[1] ?? '';
+
+    // The SQL part is first because `010-` orders it first, and the order is
+    // the dependency order — a backfill after the table it fills.
+    expect(parts.indexOf('{ sql:')).toBeLessThan(parts.indexOf('m0_1'));
+  });
+
+  it('escapes what a template literal would otherwise read as syntax', () => {
+    write('migrations/001-initial.sql', '-- migrate:up\nSELECT `${x}` \\ 1;\n');
+
+    const entry = entryFor({ config: configFor() });
+
+    expect(entry).toContain('\\`');
+    expect(entry).toContain('\\${');
+    expect(entry).toContain('\\\\');
+  });
+
+  it('writes specifiers relative to where the manifest will live', () => {
+    write('migrations/001-initial.ts', TS);
+
+    const entry = entryFor({
+      config: configFor(),
+      to: join(root, 'database', 'manifest.gen.ts'),
+    });
+
+    expect(entry).toContain('from "../migrations/001-initial.ts"');
+    expect(entry).not.toContain(root);
+  });
+
+  it('exports an empty seeds array for a project that declares none', () => {
+    write('migrations/001-initial.ts', TS);
+
+    expect(entryFor({ config: configFor() })).toContain(
+      'export const seeds = [];',
+    );
+  });
+
+  it('carries seed units alongside the migrations', () => {
+    write('migrations/001-initial.ts', TS);
+    write('seeders/demo/index.ts', TS);
+
+    const entry = entryFor({ config: configFor(join(root, 'seeders')) });
+
+    expect(entry).toContain('import * as s0_0 from');
+    expect(entry).toMatch(/export const seeds = \[\n {2}\{ name: "demo"/);
+  });
+
+  /**
+   * The whole point, end to end: a project written in SQL generates a manifest
+   * that imports nothing, so it is data — and the runner reaches the same
+   * statements through it that it would have read off a disk.
+   */
+  it('produces a manifest a machine with no source tree can run', async () => {
+    write('migrations/001-initial.sql', SQL);
+
+    const manifest = join(root, 'manifest.mjs');
+
+    writeFileSync(manifest, entryFor({ config: configFor() }));
+
+    const { migrations } = (await import(pathToFileURL(manifest).href)) as {
+      migrations: ManifestEntry[];
+    };
+
+    const sent: string[] = [];
+    const [loaded] = fromManifest(migrations);
+
+    await loaded?.module.up({
+      sql: null as never,
+      db: { query: async (text) => void sent.push(text) as never },
+    });
+
+    expect(loaded?.name).toBe('001-initial');
+    expect(sent.join('')).toContain('CREATE TABLE users (id int);');
+  });
+
+  /**
+   * The golden file. The emitted shape — `migrations`/`seeds`, each entry
+   * `{ name, sequence, checksum, parts }` — is a compatibility surface:
+   * consumers' checked-in entries import these exports, so a change to this
+   * text is a change to every image built after it, and has to be made here on
+   * purpose rather than fall out of a refactor.
+   */
+  it('emits exactly the pinned shape', async () => {
+    write('migrations/001-initial.sql', SQL);
+    write('migrations/002-backfill.ts', TS);
+    write('seeders/demo/index.ts', TS);
+
+    const { checksumOf } = await import('./discover.js');
+    const sum = (...files: string[]) =>
+      checksumOf(files.map((file) => join(root, file)));
+
+    const entry = entryFor({
+      config: configFor(join(root, 'seeders')),
+      to: join(root, 'database', 'manifest.gen.ts'),
+    });
+
+    expect(entry).toBe(
+      [
+        'import * as m1_0 from "../migrations/002-backfill.ts";',
+        'import * as s0_0 from "../seeders/demo/index.ts";',
+        '',
+        'export const migrations = [',
+        `  { name: "001-initial", sequence: 1, checksum: "${sum('migrations/001-initial.sql')}", parts: [{ sql: \`-- migrate:up\nCREATE TABLE users (id int);\n\` }] },`,
+        `  { name: "002-backfill", sequence: 2, checksum: "${sum('migrations/002-backfill.ts')}", parts: [m1_0] },`,
+        '];',
+        '',
+        'export const seeds = [',
+        `  { name: "demo", sequence: 0, checksum: "${sum('seeders/demo/index.ts')}", parts: [s0_0] },`,
+        '];',
+        '',
+      ].join('\n'),
+    );
+  });
+});
