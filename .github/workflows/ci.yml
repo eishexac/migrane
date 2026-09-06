@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The suite itself, on the node versions this package supports. 22 and 24
+  # rather than one of them, because 22.18 is where type stripping stopped being
+  # experimental and a consumer's config is TypeScript.
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm type:check
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm pack:check
+
+  # Bun is a supported runtime and gets a check of its own, because the suite
+  # cannot run under it — vitest is a node program, and a matrix axis here would
+  # be testing bun as a test runner rather than migrane under bun.
+  #
+  # What actually differs between the runtimes is module resolution and type
+  # stripping, and the e2e lane is where both are exercised: it spawns the real
+  # executable against a TypeScript project and compares what bun generates with
+  # what node does. Node is still installed, because pnpm and vitest need it —
+  # bun is the runtime under test, not the one running the test.
+  bun:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        bun: [latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
+      - run: bun --version
+      - run: pnpm install --frozen-lockfile
+      # The e2e lane spawns `bin/migrane.js`, which imports `dist/`.
+      - run: pnpm build
+      - run: pnpm vitest run --project e2e
