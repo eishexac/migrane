@@ -16,6 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          # On checkout, not just the action: the persisted credential is what
+          # pushes the branch, and a GITHUB_TOKEN push triggers no CI.
+          token: ${{ secrets.CHANGESETS_PAT || secrets.GITHUB_TOKEN }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
@@ -44,7 +48,7 @@ jobs:
           commit: 'chore: version package'
           title: 'chore: version package'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.CHANGESETS_PAT || secrets.GITHUB_TOKEN }}
       # The action tags and releases only when it can parse the publish output,
       # and changesets v3 prints a format its parser predates. So decide from
       # reality instead of logs: the version npm holds and the tags origin
