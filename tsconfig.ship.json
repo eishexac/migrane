@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  // The ship-graph check: `migrane` and `migrane/ship` must compile for a
+  // target with no platform libs at all — `"types": []` removes `@types/node`,
+  // so a `node:*` import or a `process.env` anywhere in either graph fails
+  // this build instead of surviving until somebody bundles an image. Run as
+  // part of `pnpm type:check`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": []
+  },
+  "include": ["src/index.ts", "src/ship.ts"]
+}
