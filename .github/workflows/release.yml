@@ -45,8 +45,10 @@ jobs:
         with:
           version: pnpm changeset version
           publish: pnpm changeset publish
-          commit: 'chore: version package'
-          title: 'chore: version package'
+          # Squashing a one-commit PR takes the commit's message, so `commit`
+          # is what main's history reads and `title` only labels the PR.
+          commit: 'chore: version the package'
+          title: 'chore: release the pending changesets'
         env:
           GITHUB_TOKEN: ${{ secrets.CHANGESETS_PAT || secrets.GITHUB_TOKEN }}
       # The action tags and releases only when it can parse the publish output,
