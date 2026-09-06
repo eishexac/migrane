@@ -1,0 +1,84 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+concurrency: release
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # npm >= 11.5.1 authenticates to the registry through the trusted
+      # publisher (OIDC) — no token lives anywhere in this repository.
+      - run: npm install -g npm@latest
+      # Pinned to v1 deliberately — it is the half of the auth that works.
+      #
+      # v1 exchanges the workflow's OIDC token for an npm token itself. v2
+      # removed that code, expecting the publish tool to authenticate natively
+      # (npm >= 11.5.1 can). But the tool that performs the PUT here is not
+      # npm: changesets' getPublishTool() detects the workspace type, and a
+      # pnpm workspace publishes through pnpm — whose OIDC path is where the
+      # open failures live (npm/cli#8976). Under v2 the publish never attempts
+      # auth and npm answers E404, tested twice against this registry.
+      #
+      # Revisit when pnpm-driven trusted publishing demonstrably works, and
+      # trial it on a throwaway patch release — never on one that matters.
+      - uses: changesets/action@v1
+        with:
+          version: pnpm changeset version
+          publish: pnpm changeset publish
+          commit: 'chore: version package'
+          title: 'chore: version package'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The action tags and releases only when it can parse the publish output,
+      # and changesets v3 prints a format its parser predates. So decide from
+      # reality instead of logs: the version npm holds and the tags origin
+      # holds. Idempotent — a push where nothing was published exits at the
+      # first guard, and a publish whose job died halfway heals on the next.
+      #
+      # The -f on git tag is load-bearing: changeset publish creates the tag
+      # locally in the runner and the action fails to push it, so a plain
+      # git tag collides with it on every successful publish — that is how
+      # a publish reached npm with this step red. Forcing is safe because the
+      # origin guard above already decided the tag is not published anywhere.
+      - name: Tag and release the published version
+        run: |
+          version=$(jq -r .version package.json)
+
+          # Wait for the registry before deciding from it. The publish above
+          # returns before a read of the new version succeeds, and this step
+          # starts under a second later — a release raced and lost, reaching npm
+          # with no tag and no release. "Heals on the next push" does not cover
+          # it, because a release is not followed by a push to this branch.
+          #
+          # Bounded rather than open-ended: if the registry has not caught up in
+          # two and a half minutes something is wrong that waiting will not fix,
+          # and the guard below is still the thing that decides.
+          for _ in $(seq 30); do
+            npm view "migrane@$version" version > /dev/null 2>&1 && break
+            sleep 5
+          done
+
+          if ! npm view "migrane@$version" version > /dev/null 2>&1; then exit 0; fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null 2>&1; then exit 0; fi
+          git tag -f "v$version"
+          git push origin "v$version"
+          notes=$(awk -v ver="$version" '$0 == "## " ver {flag=1; next} /^## /{flag=0} flag' CHANGELOG.md)
+          gh release create "v$version" --title "v$version" --notes "$notes"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
